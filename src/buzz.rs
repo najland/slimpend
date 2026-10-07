@@ -1,8 +1,26 @@
 use hex_literal::hex;
 use hidapi::{HidApi, HidDevice, HidError};
-use std::{collections::HashMap, error::Error, hash::Hash, time::Duration};
+use std::{collections::HashMap, error::Error, fmt, hash::Hash, time::Duration};
 
-use crate::error::SlimpendError;
+#[derive(Debug)]
+pub enum BuzzError {
+    DeviceNotFound,
+    InvalidWaveform,
+}
+
+impl fmt::Display for BuzzError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BuzzError::DeviceNotFound => {
+                write!(f, "Surface Slim Pen 2 not found")
+            }
+            BuzzError::InvalidWaveform => {
+                write!(f, "Waveform is invalid")
+            }
+        }
+    }
+}
+impl Error for BuzzError {}
 
 /*
  * https://learn.microsoft.com/en-us/surface/surface-slim-pen2-haptics-dev-notes
@@ -60,30 +78,31 @@ impl Waveform {
     }
 }
 
-pub struct PenDevice {
+pub struct BuzzDevice {
     hid_device: HidDevice,
     ordinals: HashMap<u16, u8>,
     durations: HashMap<u16, u16>,
 }
 
-impl PenDevice {
-    pub fn try_new(hid_api: HidApi, mac_addr: Option<&str>) -> Result<Self, Box<dyn Error>> {
-        let Some(dev_info) = hid_api.device_list().find(|d| {
+impl BuzzDevice {
+    pub fn new(mac_addr: Option<&str>) -> Result<Self, Box<dyn Error>> {
+        let api = HidApi::new()?;
+        let Some(dev_info) = api.device_list().find(|d| {
             d.vendor_id() == 0x045e
                 && d.product_id() == 0x0c0f
                 && (mac_addr == None || d.serial_number() == mac_addr)
                 // filter for digitizer hid api
                 && d.usage_page() == 0x0D
         }) else {
-            return Err(Box::new(SlimpendError::DeviceNotFound("Slim Pen 2")));
+            return Err(Box::new(BuzzError::DeviceNotFound));
         };
-        let hid_device = dev_info.open_device(&hid_api)?;
+        let hid_device = dev_info.open_device(&api)?;
 
         let (ordinals, durations) = get_hid_info(&hid_device)?;
 
         //initialize_device(&hid_device)?;
 
-        Ok(PenDevice {
+        Ok(BuzzDevice {
             hid_device,
             ordinals,
             durations,

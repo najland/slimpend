@@ -2,7 +2,7 @@
 
 Background service that enables Slim Pen 2 haptic feedback by binding to bluetooth, hidapi, and evdev.
 
-Requires [IPTSD](https://github.com/linux-surface/iptsd) to be running and the pen to be previously paired.
+Requires the pen to be previously paired. On IPTS devices (e.g. Surface Pro 7-10) [IPTSD](https://github.com/linux-surface/iptsd) must be running; on devices with a native HID digitizer (e.g. Surface Pro 11 with Intel) the stylus input device is detected automatically. Use `--stylus <name>` to pick a device manually.
 
 Automatically listens for connections up/down on bluetooth and starts haptic feedback when bluetooth is detected.
 
@@ -15,6 +15,6 @@ Prerequisites -
 * **important** - Slim Pen 2 has been paired before
 
 1. `cargo install --path .`
-2. `cp slimpend.service ~/.config/systemd/user`
+2. `mkdir -p ~/.config/systemd/user && cp slimpend.service ~/.config/systemd/user/` (adjust `ExecStart` to your home directory)
 3. `systemctl --user daemon-reload`
 4. `systemctl --user enable --now slimpend`

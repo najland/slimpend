@@ -8,7 +8,7 @@ use crate::{
     buzz::{BuzzDevice, BuzzError, Waveform},
 };
 use clap::{Parser, Subcommand};
-use evdev::{AbsoluteAxisCode, EventSummary, KeyCode};
+use evdev::{AbsoluteAxisCode, EventSummary, KeyCode, PropType};
 
 mod bluez;
 mod buzz;
@@ -62,6 +62,12 @@ struct Cli {
         global = true
     )]
     debug: bool,
+    #[arg(
+        long,
+        help = "Name (or part of it) of the stylus evdev device. If omitted, the stylus is detected automatically (IPTSD Virtual Stylus, or any direct-input pen digitizer)",
+        global = true
+    )]
+    stylus: Option<String>,
     #[command(subcommand)]
     command: Option<Commands>,
 }
@@ -135,7 +141,7 @@ async fn serve(cli: &Cli) -> Result<(), Box<dyn Error>> {
         }
         let addr = bt_device.address().to_string().to_ascii_lowercase();
         // if it doesnt connect the first time try again as it takes a second for hids to register
-        let Ok((buzz_dev, ev_dev)) = try_connect_hid(&addr) else {
+        let Ok((buzz_dev, ev_dev)) = try_connect_hid(&addr, cli) else {
             tokio::time::sleep(Duration::from_secs(1)).await;
             continue;
         };
@@ -157,20 +163,72 @@ async fn serve(cli: &Cli) -> Result<(), Box<dyn Error>> {
     }
 }
 
-fn try_connect_hid(addr: &str) -> Result<(BuzzDevice, evdev::Device), Box<dyn Error>> {
+fn try_connect_hid(addr: &str, cli: &Cli) -> Result<(BuzzDevice, evdev::Device), Box<dyn Error>> {
     let buzz_dev = BuzzDevice::new(Some(&addr))?;
-    let ev_dev = evdev::enumerate()
-        .find_map(|(_, d)| {
-            if let Some(dev_name) = d.name()
-                && dev_name.contains("IPTSD Virtual Stylus")
-            {
-                Some(d)
-            } else {
-                None
-            }
-        })
-        .ok_or("No evdev device found matching \"IPTS Virtual Stylus\"")?;
+    let ev_dev = find_stylus_evdev(cli.stylus.as_deref())?;
+    if cli.debug {
+        println!(
+            "Using stylus evdev device: {}",
+            ev_dev.name().unwrap_or("<unnamed>")
+        );
+    }
     return Ok((buzz_dev, ev_dev));
+}
+
+/// Name substring used by iptsd for its virtual stylus device.
+const IPTSD_STYLUS_NAME: &str = "IPTSD Virtual Stylus";
+
+/// Returns true if the evdev device looks like a pen digitizer on a screen:
+/// a direct-input device reporting pen tool, pressure and absolute X/Y.
+fn is_screen_stylus(d: &evdev::Device) -> bool {
+    // the Slim Pen 2 itself (bluetooth, 045e:0c0f) only exposes buttons, never treat it as the digitizer
+    let id = d.input_id();
+    if id.vendor() == 0x045e && id.product() == 0x0c0f {
+        return false;
+    }
+    let has_pen = d
+        .supported_keys()
+        .is_some_and(|k| k.contains(KeyCode::BTN_TOOL_PEN));
+    let has_axes = d.supported_absolute_axes().is_some_and(|a| {
+        a.contains(AbsoluteAxisCode::ABS_X)
+            && a.contains(AbsoluteAxisCode::ABS_Y)
+            && a.contains(AbsoluteAxisCode::ABS_PRESSURE)
+    });
+    has_pen && has_axes && d.properties().contains(PropType::DIRECT)
+}
+
+/// Finds the stylus input device at runtime.
+///
+/// * With `override_name`, the first device whose name contains it (case-insensitive) is used.
+/// * Otherwise the iptsd virtual stylus is preferred (IPTS devices, e.g. Surface Pro 7-10),
+///   falling back to any direct-input pen digitizer (e.g. the Elan I2C digitizer
+///   "MSHW0585:00 04F3:4375 Stylus" on the Surface Pro 11 with Intel).
+fn find_stylus_evdev(override_name: Option<&str>) -> Result<evdev::Device, Box<dyn Error>> {
+    let devices: Vec<evdev::Device> = evdev::enumerate().map(|(_, d)| d).collect();
+    let name_of = |d: &evdev::Device| d.name().unwrap_or("").to_string();
+
+    if let Some(wanted) = override_name {
+        let wanted_lc = wanted.to_lowercase();
+        return devices
+            .into_iter()
+            .find(|d| name_of(d).to_lowercase().contains(&wanted_lc))
+            .ok_or_else(|| format!("No evdev device found matching \"{}\"", wanted).into());
+    }
+
+    let mut candidates: Vec<evdev::Device> =
+        devices.into_iter().filter(is_screen_stylus).collect();
+    if let Some(pos) = candidates
+        .iter()
+        .position(|d| name_of(d).contains(IPTSD_STYLUS_NAME))
+    {
+        return Ok(candidates.swap_remove(pos));
+    }
+    if candidates.is_empty() {
+        return Err("No stylus evdev device found (is your user in the `input` group? \
+                    You can also pass --stylus <name>)"
+            .into());
+    }
+    Ok(candidates.swap_remove(0))
 }
 
 async fn main_loop(

@@ -15,6 +15,7 @@ Prerequisites -
 * **important** - Slim Pen 2 has been paired before
 
 1. `cargo install --path .`
-2. `mkdir -p ~/.config/systemd/user && cp slimpend.service ~/.config/systemd/user/` (adjust `ExecStart` to your home directory)
-3. `systemctl --user daemon-reload`
-4. `systemctl --user enable --now slimpend`
+2. `mkdir -p ~/.config/systemd/user && cp slimpend.service ~/.config/systemd/user/`
+3. 'export PATH="/home/jan/.cargo/bin:$PATH"' (and add the line to ~/.bashrc)
+4. `systemctl --user daemon-reload`
+5. `systemctl --user enable --now slimpend`
